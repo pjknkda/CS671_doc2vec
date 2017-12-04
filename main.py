@@ -1,5 +1,6 @@
 import csv
 import functools
+import json
 import logging
 import os
 import os.path
@@ -9,6 +10,7 @@ import time
 from contextlib import contextmanager
 from multiprocessing.pool import Pool
 
+import msgpack
 import nltk.data
 import numpy as np
 import pandas as pd
@@ -16,15 +18,20 @@ import tensorflow as tf
 
 from KaggleWord2VecUtility import KaggleWord2VecUtility
 
+try:
+    from tqdm import tqdm
+except Exception:
+    def tqdm(lst): return lst
+
 WORKER_NUM_PROCESS = 6
 SPECIAL_WORDS = ['<UNK>', '<EOS>', '<PAD>', '<GO>']
 
 INFERENCE_MODE = 'next'  # 'self' or 'next'
 BATCH_SIZE = 256
-TOTAL_EPOCH = 20
+TOTAL_EPOCH = 10
 MAX_SENTENCE_LENGTH = 60
 RNN_SIZE = 128
-RNN_LAYERS = 3
+RNN_LAYERS = 2
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s',
                     level=logging.INFO)
@@ -42,12 +49,12 @@ def _read_corpus_work(tokenizer, doc):
     return KaggleWord2VecUtility.review_to_sentences(doc, tokenizer)
 
 
-def read_corpus(stage='train'):
+def read_corpus(stage):
     '''
         Read train corpus
     '''
-    if os.path.exists('cache/read_corpus'):
-        with open('cache/read_corpus', 'rb') as f:
+    if os.path.exists('cache/read_corpus_%s' % stage):
+        with open('cache/read_corpus_%s' % stage, 'rb') as f:
             labels, docs = pickle.load(f)
         return labels, docs
 
@@ -65,7 +72,7 @@ def read_corpus(stage='train'):
         train_word_vector['news']
     )
 
-    with open('cache/read_corpus', 'wb') as f:
+    with open('cache/read_corpus_%s' % stage, 'wb') as f:
         pickle.dump((labels, docs), f)
 
     return labels, docs
@@ -94,9 +101,9 @@ def _transform_corpus_work(vocab_words, doc):
     return transformed_doc
 
 
-def transform_corpus(docs, vocab_words):
-    if os.path.exists('cache/transform_corpus'):
-        with open('cache/transform_corpus', 'rb') as f:
+def transform_corpus(docs, vocab_words, stage):
+    if os.path.exists('cache/transform_corpus_%s' % stage):
+        with open('cache/transform_corpus_%s' % stage, 'rb') as f:
             transformed_docs = pickle.load(f)
         return transformed_docs
 
@@ -106,22 +113,24 @@ def transform_corpus(docs, vocab_words):
         docs
     )
 
-    with open('cache/transform_corpus', 'wb') as f:
+    with open('cache/transform_corpus_%s' % stage, 'wb') as f:
         pickle.dump(transformed_docs, f)
 
     return transformed_docs
 
 
-def make_train_corpus(docs):
+def make_batch_corpus(docs):
     eos_idx = SPECIAL_WORDS.index('<EOS>')
     pad_idx = SPECIAL_WORDS.index('<PAD>')
     go_idx = SPECIAL_WORDS.index('<GO>')
 
+    in_setences_by_docs = []
     in_sentences = []
     out_sentences = []
     out_sentences_len = []
     target_sentences = []
-    for doc in docs:
+    for doc in tqdm(docs):
+        in_setences_by_doc = []
         for i in range(len(doc)):
             in_sentence = doc[i][:MAX_SENTENCE_LENGTH]
 
@@ -146,12 +155,16 @@ def make_train_corpus(docs):
             target_sentence_np[:len(out_sentence)] = out_sentence
             target_sentence_np[len(out_sentence)] = eos_idx
 
+            in_setences_by_doc.append(in_sentence_np)
             in_sentences.append(in_sentence_np)
             out_sentences.append(out_sentence_np)
             out_sentences_len.append(len(out_sentence) + 1)  # 1: <GO> or <EOS>
             target_sentences.append(target_sentence_np)
 
+        in_setences_by_docs.append(np.array(in_setences_by_doc))
+
     train_corpus = {
+        'doc': in_setences_by_docs,
         'in': np.array(in_sentences),
         'out': np.array(out_sentences),
         'out_len': np.array(out_sentences_len),
@@ -167,7 +180,7 @@ def build_graph(w2v_model, vocab_words):
     learning_rate = 0.001
 
     # Shape: [batch_size, max_length]
-    enc_input = tf.placeholder(tf.int64, [None, None])
+    enc_input = tf.placeholder(tf.int64, [None, None], name='X')
 
     # Shape: [batch_size, max_length]
     dec_input = tf.placeholder(tf.int64, [None, None])
@@ -198,8 +211,10 @@ def build_graph(w2v_model, vocab_words):
 
         enc_cell_layer = tf.contrib.rnn.MultiRNNCell(enc_cell_list)
 
-        outputs, enc_states = tf.nn.dynamic_rnn(enc_cell_layer, enc_embed,
-                                                dtype=tf.float32)
+        enc_outputs, enc_states = tf.nn.dynamic_rnn(enc_cell_layer, enc_embed,
+                                                    dtype=tf.float32)
+
+        enc_states_ident = tf.identity(enc_outputs, name='sentence_vector')
 
     with tf.variable_scope('decoder'):
         dec_cell_list = []
@@ -210,11 +225,11 @@ def build_graph(w2v_model, vocab_words):
 
         dec_cell_layer = tf.contrib.rnn.MultiRNNCell(dec_cell_list)
 
-        outputs, dec_states = tf.nn.dynamic_rnn(dec_cell_layer, dec_embed,
-                                                initial_state=enc_states,
-                                                dtype=tf.float32)
+        dec_outputs, dec_states = tf.nn.dynamic_rnn(dec_cell_layer, dec_embed,
+                                                    initial_state=enc_states,
+                                                    dtype=tf.float32)
 
-    model = tf.layers.dense(outputs, vocab_size, activation=None)
+    model = tf.layers.dense(dec_outputs, vocab_size, activation=None)
 
     # cross_entropy = tf.reduce_mean(
     #     tf.nn.sparse_softmax_cross_entropy_with_logits(logits=model, labels=targets)
@@ -271,7 +286,8 @@ def train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, plac
                 break
 
         if 0 < epoch_start:
-            model_saver.restore(session, '%s/epoch_%d.ckpt' % (model_save_dir, epoch_start - 1))
+            save_path = '%s/epoch_%d.ckpt' % (model_save_dir, epoch_start - 1)
+            model_saver.restore(session, save_path)
 
         for epoch in range(epoch_start, TOTAL_EPOCH):
             for batch_start_idx, batch_enc_input, batch_dec_input, batch_dec_length_input, batch_targets in _get_batches():
@@ -290,6 +306,45 @@ def train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, plac
             save_path = model_saver.save(session, '%s/epoch_%d.ckpt' % (model_save_dir, epoch))
             logging.info('Model is saved to %s', save_path)
 
+    return save_path
+
+
+def get_sentence_vectors(model_path, train_corpus, test_corpus):
+    def _corpus2tensor(doc):
+        return doc[:, ::-1]
+
+    tf.get_default_graph()
+    train_results, test_results = [], []
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        saver = tf.train.Saver()
+        saver.restore(sess, model_path)
+
+        graph = tf.get_default_graph()
+        X = graph.get_tensor_by_name('X:0')
+        sentence_vector = graph.get_tensor_by_name('encoder/sentence_vector:0')
+
+        for corpus, results in [[train_corpus, train_results],
+                                [test_corpus, test_results]]:
+            for doc in tqdm(corpus):
+                enc_sentence = sess.run(sentence_vector, feed_dict={X: _corpus2tensor(doc)})
+                enc_sentence = enc_sentence[:, -1, :]
+                doc_vec = np.mean(enc_sentence, axis=0)
+                results.append(doc_vec.tolist())
+
+    try:
+        os.mkdir('outputs')
+    except FileExistsError:
+        logging.info('Found output directory')
+
+    curr_ts = time.time()
+
+    with open('outputs/%d_train.msgpack' % curr_ts, 'wb') as f:
+        msgpack.dump(train_results, f)
+
+    with open('outputs/%d_test.msgpack' % curr_ts, 'wb') as f:
+        msgpack.dump(test_results, f)
+
 
 def main():
     try:
@@ -299,22 +354,28 @@ def main():
         logging.info('Use `cache` directory')
 
     with task_step('Read corpus'):
-        labels, docs = read_corpus()
+        train_labels, train_docs = read_corpus('train')
+        test_labels, test_docs = read_corpus('test')
 
     with task_step('Read pretrained word2vec model'):
         w2v_model, vocab_words = read_word2vec()
 
-    with task_step('Transform corpus to be index-based'):
-        transformed_docs = transform_corpus(docs, vocab_words)
+    with task_step('Transform train/test corpus to be index-based'):
+        train_transformed_docs = transform_corpus(train_docs, vocab_words, 'train')
+        test_transformed_docs = transform_corpus(test_docs, vocab_words, 'test')
 
-    with task_step('Build train corpus'):
-        train_corpus = make_train_corpus(transformed_docs)
+    with task_step('Make train/test corpus to batch-friendly'):
+        train_corpus = make_batch_corpus(train_transformed_docs)
+        test_corpus = make_batch_corpus(test_transformed_docs)
 
     with task_step('Build RNN graph'):
         model, cross_entropy, optimizer, placeholders = build_graph(w2v_model, vocab_words)
 
-    # with task_step('Train RNN model'):
-    #     train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, placeholders)
+    with task_step('Train RNN model'):
+        model_path = train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, placeholders)
+
+    with task_step('Get sentence vector from test corpus using the model'):
+        get_sentence_vectors(model_path, train_corpus['doc'], test_corpus['doc'])
 
 
 if __name__ == '__main__':
