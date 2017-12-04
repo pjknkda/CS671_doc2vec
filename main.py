@@ -134,6 +134,13 @@ def make_batch_corpus(docs):
         for i in range(len(doc)):
             in_sentence = doc[i][:MAX_SENTENCE_LENGTH]
 
+            in_sentence_np = np.full(MAX_SENTENCE_LENGTH + 1, pad_idx)
+            out_sentence_np = np.full(MAX_SENTENCE_LENGTH + 1, pad_idx)
+            target_sentence_np = np.full(MAX_SENTENCE_LENGTH + 1, pad_idx)
+
+            in_sentence_np[:len(in_sentence)] = in_sentence
+            in_setences_by_doc.append(in_sentence_np)
+
             if INFERENCE_MODE == 'self':
                 out_sentence = doc[i][:MAX_SENTENCE_LENGTH]
             elif INFERENCE_MODE == 'next':
@@ -143,19 +150,12 @@ def make_batch_corpus(docs):
             else:
                 raise ValueError('Unknown inference mode : %s' % INFERENCE_MODE)
 
-            in_sentence_np = np.full(MAX_SENTENCE_LENGTH + 1, pad_idx)
-            out_sentence_np = np.full(MAX_SENTENCE_LENGTH + 1, pad_idx)
-            target_sentence_np = np.full(MAX_SENTENCE_LENGTH + 1, pad_idx)
-
-            in_sentence_np[:len(in_sentence)] = in_sentence
-
             out_sentence_np[0] = go_idx
             out_sentence_np[1:len(out_sentence) + 1] = out_sentence
 
             target_sentence_np[:len(out_sentence)] = out_sentence
             target_sentence_np[len(out_sentence)] = eos_idx
 
-            in_setences_by_doc.append(in_sentence_np)
             in_sentences.append(in_sentence_np)
             out_sentences.append(out_sentence_np)
             out_sentences_len.append(len(out_sentence) + 1)  # 1: <GO> or <EOS>
