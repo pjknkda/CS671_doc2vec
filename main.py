@@ -26,12 +26,19 @@ except Exception:
 WORKER_NUM_PROCESS = 6
 SPECIAL_WORDS = ['<UNK>', '<EOS>', '<PAD>', '<GO>']
 
-INFERENCE_MODE = 'next'  # 'self' or 'next'
-BATCH_SIZE = 256
-TOTAL_EPOCH = 10
-MAX_SENTENCE_LENGTH = 60
-RNN_SIZE = 128
-RNN_LAYERS = 2
+INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'next')  # 'self' or 'next'
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', '256'))
+TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '100'))
+MAX_SENTENCE_LENGTH = int(os.getenv('MAX_SENTENCE_LENGTH', '60'))
+RNN_SIZE = int(os.getenv('RNN_SIZE', '128'))
+RNN_LAYERS = int(os.getenv('RNN_LAYERS', '2'))
+
+print('INFERENCE_MODE', INFERENCE_MODE)
+print('BATCH_SIZE', BATCH_SIZE)
+print('TOTAL_EPOCH', TOTAL_EPOCH)
+print('MAX_SENTENCE_LENGTH', MAX_SENTENCE_LENGTH)
+print('RNN_SIZE', RNN_SIZE)
+print('RNN_LAYERS', RNN_LAYERS)
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s',
                     level=logging.INFO)
@@ -337,12 +344,14 @@ def get_sentence_vectors(model_path, train_corpus, test_corpus):
     except FileExistsError:
         logging.info('Found output directory')
 
+    output_name = '%s_bat_%d_maxlen_%d_unit_%d_layer_%d_maxepoch_%d' % (
+        INFERENCE_MODE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, TOTAL_EPOCH)
     curr_ts = time.time()
 
-    with open('outputs/%d_train.msgpack' % curr_ts, 'wb') as f:
+    with open('outputs/%s_%d_train.msgpack' % (output_name, curr_ts), 'wb') as f:
         msgpack.dump(train_results, f)
 
-    with open('outputs/%d_test.msgpack' % curr_ts, 'wb') as f:
+    with open('outputs/%s_%d_test.msgpack' % (output_name, curr_ts), 'wb') as f:
         msgpack.dump(test_results, f)
 
 
