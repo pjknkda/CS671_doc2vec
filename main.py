@@ -31,7 +31,7 @@ SPECIAL_WORDS = ['<UNK>', '<EOS>', '<PAD>', '<GO>']
 INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'next')  # 'self' or 'next'
 CELL_TYPE = os.getenv('CELL_TYPE', 'gru')  # 'gru' or 'lstm'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '256'))
-TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '50'))
+TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '100'))
 MAX_SENTENCE_LENGTH = int(os.getenv('MAX_SENTENCE_LENGTH', '30'))
 RNN_SIZE = int(os.getenv('RNN_SIZE', '256'))
 RNN_LAYERS = int(os.getenv('RNN_LAYERS', '3'))
@@ -260,7 +260,7 @@ def build_graph(w2v_model, vocab_words):
     return model, cross_entropy, optimizer, placeholders
 
 
-def train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, placeholders):
+def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, optimizer, placeholders):
     logging.info('# of samples: %d', train_corpus['in'].shape[0])
 
     def _get_batches():
@@ -285,13 +285,18 @@ def train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, plac
             yield batch_start_idx, batch_enc_input, batch_dec_input, batch_dec_length_input, batch_targets_input
 
     model_saver = tf.train.Saver(max_to_keep=None)
-    model_save_dir = 'cache/inf_%s_bat_%d_maxlen_%d_unit_%d_layer_%d' % (
-        INFERENCE_MODE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS)
+    model_save_dir = 'cache/inf_%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d' % (
+        INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS)
 
     try:
         os.mkdir(model_save_dir)
     except FileExistsError:
         logging.info('Found pre-trained model directory')
+
+    try:
+        os.mkdir('outputs')
+    except FileExistsError:
+        logging.info('Found output directory')
 
     with tf.Session() as session:
         session.run(tf.global_variables_initializer())
@@ -322,6 +327,32 @@ def train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, plac
 
             save_path = model_saver.save(session, '%s/epoch_%d.ckpt' % (model_save_dir, epoch))
             logging.info('Model is saved to %s', save_path)
+
+            if (epoch + 1) % 10 == 0:
+                logging.info('Store document vectors %s', save_path)
+
+                graph = tf.get_default_graph()
+                X = graph.get_tensor_by_name('X:0')
+                sentence_vector = graph.get_tensor_by_name('encoder/sentence_vector:0')
+
+                train_results, test_results = [], []
+                for corpus, results in [[train_corpus['doc'], train_results],
+                                        [test_corpus['doc'], test_results]]:
+                    for doc in tqdm(corpus):
+                        enc_sentence = session.run(sentence_vector, feed_dict={X: doc[:, ::-1]})
+                        enc_sentence = enc_sentence[:, -1, :]
+                        doc_vec = np.mean(enc_sentence, axis=0)
+                        results.append(doc_vec.tolist())
+
+                output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_maxepoch_%d' % (
+                    INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, TOTAL_EPOCH)
+                curr_ts = time.time()
+
+                with open('outputs/%s_%d_train.msgpack' % (output_name, curr_ts), 'wb') as f:
+                    msgpack.dump(train_results, f)
+
+                with open('outputs/%s_%d_test.msgpack' % (output_name, curr_ts), 'wb') as f:
+                    msgpack.dump(test_results, f)
 
     return save_path
 
@@ -354,8 +385,8 @@ def get_sentence_vectors(model_path, train_corpus, test_corpus):
     except FileExistsError:
         logging.info('Found output directory')
 
-    output_name = '%s_bat_%d_maxlen_%d_unit_%d_layer_%d_maxepoch_%d' % (
-        INFERENCE_MODE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, TOTAL_EPOCH)
+    output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_maxepoch_%d' % (
+        INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, TOTAL_EPOCH)
     curr_ts = time.time()
 
     with open('outputs/%s_%d_train.msgpack' % (output_name, curr_ts), 'wb') as f:
@@ -391,10 +422,11 @@ def main():
         model, cross_entropy, optimizer, placeholders = build_graph(w2v_model, vocab_words)
 
     with task_step('Train RNN model'):
-        model_path = train_model(vocab_words, train_corpus, model, cross_entropy, optimizer, placeholders)
+        model_path = train_model(vocab_words, train_corpus, test_corpus,
+                                 model, cross_entropy, optimizer, placeholders)
 
-    with task_step('Get sentence vector from test corpus using the model'):
-        get_sentence_vectors(model_path, train_corpus['doc'], test_corpus['doc'])
+    # with task_step('Get sentence vector from test corpus using the model'):
+    #     get_sentence_vectors(model_path, train_corpus['doc'], test_corpus['doc'])
 
 
 if __name__ == '__main__':
