@@ -6,6 +6,7 @@ import os
 import os.path
 import pickle
 import random
+import re
 import time
 from contextlib import contextmanager
 from multiprocessing.pool import Pool
@@ -15,6 +16,7 @@ import nltk.data
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+from nltk.corpus import stopwords
 
 from KaggleWord2VecUtility import KaggleWord2VecUtility
 
@@ -27,13 +29,15 @@ WORKER_NUM_PROCESS = 6
 SPECIAL_WORDS = ['<UNK>', '<EOS>', '<PAD>', '<GO>']
 
 INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'next')  # 'self' or 'next'
+CELL_TYPE = os.getenv('CELL_TYPE', 'gru')  # 'gru' or 'lstm'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '256'))
-TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '100'))
-MAX_SENTENCE_LENGTH = int(os.getenv('MAX_SENTENCE_LENGTH', '60'))
-RNN_SIZE = int(os.getenv('RNN_SIZE', '128'))
-RNN_LAYERS = int(os.getenv('RNN_LAYERS', '2'))
+TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '50'))
+MAX_SENTENCE_LENGTH = int(os.getenv('MAX_SENTENCE_LENGTH', '30'))
+RNN_SIZE = int(os.getenv('RNN_SIZE', '256'))
+RNN_LAYERS = int(os.getenv('RNN_LAYERS', '3'))
 
 print('INFERENCE_MODE', INFERENCE_MODE)
+print('CELL_TYPE', CELL_TYPE)
 print('BATCH_SIZE', BATCH_SIZE)
 print('TOTAL_EPOCH', TOTAL_EPOCH)
 print('MAX_SENTENCE_LENGTH', MAX_SENTENCE_LENGTH)
@@ -53,7 +57,8 @@ def task_step(descrption):
 
 
 def _read_corpus_work(tokenizer, doc):
-    return KaggleWord2VecUtility.review_to_sentences(doc, tokenizer)
+    return KaggleWord2VecUtility.review_to_sentences(doc, tokenizer,
+                                                     remove_stopwords=True)
 
 
 def read_corpus(stage):
@@ -212,13 +217,17 @@ def build_graph(w2v_model, vocab_words):
     with tf.variable_scope('encoder'):
         enc_cell_list = []
         for i in range(RNN_LAYERS):
-            enc_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
+            if CELL_TYPE == 'gru':
+                enc_cell = tf.contrib.rnn.GRUCell(RNN_SIZE)
+            elif CELL_TYPE == 'lstm':
+                enc_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
+
             enc_cell = tf.contrib.rnn.DropoutWrapper(enc_cell, output_keep_prob=drop_keep_prob)
             enc_cell_list.append(enc_cell)
 
-        enc_cell_layer = tf.contrib.rnn.MultiRNNCell(enc_cell_list)
+        enc_cell_stack = tf.contrib.rnn.MultiRNNCell(enc_cell_list)
 
-        enc_outputs, enc_states = tf.nn.dynamic_rnn(enc_cell_layer, enc_embed,
+        enc_outputs, enc_states = tf.nn.dynamic_rnn(enc_cell_stack, enc_embed,
                                                     dtype=tf.float32)
 
         enc_states_ident = tf.identity(enc_outputs, name='sentence_vector')
@@ -226,21 +235,22 @@ def build_graph(w2v_model, vocab_words):
     with tf.variable_scope('decoder'):
         dec_cell_list = []
         for i in range(RNN_LAYERS):
-            dec_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
+            if CELL_TYPE == 'gru':
+                dec_cell = tf.contrib.rnn.GRUCell(RNN_SIZE)
+            elif CELL_TYPE == 'lstm':
+                dec_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
+
             dec_cell = tf.contrib.rnn.DropoutWrapper(dec_cell, output_keep_prob=drop_keep_prob)
+
             dec_cell_list.append(dec_cell)
 
-        dec_cell_layer = tf.contrib.rnn.MultiRNNCell(dec_cell_list)
+        dec_cell_stack = tf.contrib.rnn.MultiRNNCell(dec_cell_list)
 
-        dec_outputs, dec_states = tf.nn.dynamic_rnn(dec_cell_layer, dec_embed,
+        dec_outputs, dec_states = tf.nn.dynamic_rnn(dec_cell_stack, dec_embed,
                                                     initial_state=enc_states,
                                                     dtype=tf.float32)
 
     model = tf.layers.dense(dec_outputs, vocab_size, activation=None)
-
-    # cross_entropy = tf.reduce_mean(
-    #     tf.nn.sparse_softmax_cross_entropy_with_logits(logits=model, labels=targets)
-    # )
 
     mask = tf.sequence_mask(dec_length_input, MAX_SENTENCE_LENGTH + 1, dtype=tf.float32)
     cross_entropy = tf.contrib.seq2seq.sequence_loss(model, targets, mask)
