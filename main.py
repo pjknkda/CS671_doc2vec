@@ -344,8 +344,8 @@ def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, op
                         doc_vec = np.mean(enc_sentence, axis=0)
                         results.append(doc_vec.tolist())
 
-                output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_maxepoch_%d' % (
-                    INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, TOTAL_EPOCH)
+                output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_epoch_%d' % (
+                    INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, epoch + 1)
                 curr_ts = time.time()
 
                 with open('outputs/%s_%d_train.msgpack' % (output_name, curr_ts), 'wb') as f:
@@ -385,7 +385,7 @@ def get_sentence_vectors(model_path, train_corpus, test_corpus):
     except FileExistsError:
         logging.info('Found output directory')
 
-    output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_maxepoch_%d' % (
+    output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_epoch_%d' % (
         INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, TOTAL_EPOCH)
     curr_ts = time.time()
 

@@ -3,6 +3,8 @@ import functools
 import json
 import os
 import random
+import re
+import sys
 import time
 from multiprocessing.pool import Pool
 
@@ -17,7 +19,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import label_binarize
 from sklearn.svm import SVC, LinearSVC
 
-WORKER_NUM_PROCESS = 6
+WORKER_NUM_PROCESS = os.cpu_count()
 
 
 class CLF:
@@ -74,16 +76,60 @@ def handle_one_exp(train_labels, test_labels, f_name):
         r = [s[i][14:].split() for i in range(len(s)) if i not in idx]
         return r
 
-    with open('outputs/' + f_name + '_train.msgpack', 'rb') as f:
-        train_docs = msgpack.load(f)
+    if os.path.exists('outputs/%s_result.json' % f_name):
+        with open('outputs/%s_result.json' % f_name, 'r') as f:
+            return (f_name, json.load(f))
+    else:
+        with open('outputs/%s_train.msgpack' % f_name, 'rb') as f:
+            train_docs = msgpack.load(f)
 
-    with open('outputs/' + f_name + '_test.msgpack', 'rb') as f:
-        test_docs = msgpack.load(f)
+        with open('outputs/%s_test.msgpack' % f_name, 'rb') as f:
+            test_docs = msgpack.load(f)
 
-    clf = CLF()
-    report = clf.do_exp(train_docs, train_labels, test_docs, test_labels, 'accuracy')
+        clf = CLF()
+        report = clf.do_exp(train_docs, train_labels, test_docs, test_labels, 'accuracy')
 
-    return (f_name, parse(report[2]))
+        result = parse(report[2])
+        with open('outputs/%s_result.json' % f_name, 'w') as f:
+            json.dump(result, f)
+
+        return (f_name, result)
+
+
+def format_result_to_csv(filepath):
+    with open(filepath, 'r') as f:
+        results = json.load(f)
+        for k, v in results.items():
+            m = re.match('(.*)_cell_(.*)_bat_(\d+)_maxlen_(\d+)_unit_(\d+)_layer_(\d+)_epoch_(\d+)_(\d+)', k)
+
+            inf_mode = m.group(1)
+            cell_type = m.group(2)
+            batch_size = m.group(3)
+            max_length = m.group(4)
+            num_unit = m.group(5)
+            num_layer = m.group(6)
+            epoch = m.group(7)
+
+            precision = v[-2][0]
+            recall = v[-2][1]
+            f1 = v[-2][2]
+
+            rows.append({
+                'inf_mode': inf_mode,
+                'cell_type': cell_type,
+                'batch_size': batch_size,
+                'sentence_length': max_length,
+                'num_unit': num_unit,
+                'num_layer': num_layer,
+                'epoch': epoch,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1})
+
+    pd.DataFrame(rows,
+                 columns=['inf_mode', 'cell_type', 'batch_size', 'sentence_length',
+                          'num_unit', 'num_layer', 'epoch',
+                          'precision', 'recall', 'f1']).to_csv(filepath + '.csv')
 
 
 if __name__ == '__main__':
@@ -95,7 +141,7 @@ if __name__ == '__main__':
     train_labels = [int(i) for i in list(train['class'])]
     test_labels = [int(i) for i in list(test['class'])]
 
-    files = [f[:-14] for f in os.listdir('outputs/') if f.endswith('train.msgpack')]
+    files = [f[:-len('_train.msgpack')] for f in os.listdir('outputs/') if f.endswith('_train.msgpack')]
 
     worker_pool = Pool(processes=WORKER_NUM_PROCESS)
     reports = worker_pool.map(
@@ -105,5 +151,7 @@ if __name__ == '__main__':
 
     results = {kv[0]: kv[1] for kv in reports}
 
-    with open('results/%d.json' % time.time(), 'w') as f:
+    result_filename = 'results/%d.json' % time.time()
+    with open(result_filename, 'w') as f:
         json.dump(results, f, indent=2)
+    format_result_to_csv(result_filename)
