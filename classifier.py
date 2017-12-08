@@ -97,6 +97,7 @@ def handle_one_exp(train_labels, test_labels, f_name):
 
 
 def format_result_to_csv(filepath):
+    rows = []
     with open(filepath, 'r') as f:
         results = json.load(f)
         for k, v in results.items():
