@@ -29,6 +29,7 @@ WORKER_NUM_PROCESS = 6
 SPECIAL_WORDS = ['<UNK>', '<EOS>', '<PAD>', '<GO>']
 
 INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'next')  # 'self' or 'next'
+RNN_DIRECTION = os.getenv('RNN_DIRECTION', 'bi')  # 'uni' or 'bi'
 CELL_TYPE = os.getenv('CELL_TYPE', 'gru')  # 'gru' or 'lstm'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '256'))
 TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '100'))
@@ -37,6 +38,7 @@ RNN_SIZE = int(os.getenv('RNN_SIZE', '256'))
 RNN_LAYERS = int(os.getenv('RNN_LAYERS', '3'))
 
 print('INFERENCE_MODE', INFERENCE_MODE)
+print('RNN_DIRECTION', RNN_DIRECTION)
 print('CELL_TYPE', CELL_TYPE)
 print('BATCH_SIZE', BATCH_SIZE)
 print('TOTAL_EPOCH', TOTAL_EPOCH)
@@ -215,40 +217,64 @@ def build_graph(w2v_model, vocab_words):
         dec_embed = tf.nn.embedding_lookup(embedding, dec_input)
 
     with tf.variable_scope('encoder'):
-        enc_cell_list = []
-        for i in range(RNN_LAYERS):
-            if CELL_TYPE == 'gru':
-                enc_cell = tf.contrib.rnn.GRUCell(RNN_SIZE)
-            elif CELL_TYPE == 'lstm':
-                enc_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
+        def _make_cell():
+            enc_cell_list = []
+            for i in range(RNN_LAYERS):
+                if CELL_TYPE == 'gru':
+                    enc_cell = tf.contrib.rnn.GRUCell(RNN_SIZE)
+                elif CELL_TYPE == 'lstm':
+                    enc_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
 
-            enc_cell = tf.contrib.rnn.DropoutWrapper(enc_cell, output_keep_prob=drop_keep_prob)
-            enc_cell_list.append(enc_cell)
+                enc_cell = tf.contrib.rnn.DropoutWrapper(enc_cell, output_keep_prob=drop_keep_prob)
+                enc_cell_list.append(enc_cell)
 
-        enc_cell_stack = tf.contrib.rnn.MultiRNNCell(enc_cell_list)
+            return tf.contrib.rnn.MultiRNNCell(enc_cell_list)
 
-        enc_outputs, enc_states = tf.nn.dynamic_rnn(enc_cell_stack, enc_embed,
-                                                    dtype=tf.float32)
+        if RNN_DIRECTION == 'uni':
+            enc_cell = _make_cell()
+            enc_outputs, enc_states = tf.nn.dynamic_rnn(enc_cell, enc_embed,
+                                                        dtype=tf.float32)
+        elif RNN_DIRECTION == 'bi':
+            fw_cell = _make_cell()
+            bw_cell = _make_cell()
+
+            enc_outputs, (enc_fw_states, enc_bw_states) = tf.nn.bidirectional_dynamic_rnn(
+                fw_cell, bw_cell, enc_embed,
+                dtype=tf.float32)
+            enc_outputs = tf.concat(enc_outputs, -1)
 
         enc_states_ident = tf.identity(enc_outputs, name='sentence_vector')
 
     with tf.variable_scope('decoder'):
-        dec_cell_list = []
-        for i in range(RNN_LAYERS):
-            if CELL_TYPE == 'gru':
-                dec_cell = tf.contrib.rnn.GRUCell(RNN_SIZE)
-            elif CELL_TYPE == 'lstm':
-                dec_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
+        def _make_cell():
+            dec_cell_list = []
+            for i in range(RNN_LAYERS):
+                if CELL_TYPE == 'gru':
+                    dec_cell = tf.contrib.rnn.GRUCell(RNN_SIZE)
+                elif CELL_TYPE == 'lstm':
+                    dec_cell = tf.contrib.rnn.BasicLSTMCell(RNN_SIZE)
 
-            dec_cell = tf.contrib.rnn.DropoutWrapper(dec_cell, output_keep_prob=drop_keep_prob)
+                dec_cell = tf.contrib.rnn.DropoutWrapper(dec_cell, output_keep_prob=drop_keep_prob)
 
-            dec_cell_list.append(dec_cell)
+                dec_cell_list.append(dec_cell)
 
-        dec_cell_stack = tf.contrib.rnn.MultiRNNCell(dec_cell_list)
+            return tf.contrib.rnn.MultiRNNCell(dec_cell_list)
 
-        dec_outputs, dec_states = tf.nn.dynamic_rnn(dec_cell_stack, dec_embed,
-                                                    initial_state=enc_states,
-                                                    dtype=tf.float32)
+        if RNN_DIRECTION == 'uni':
+            dec_cell = _make_cell()
+            enc_outputs, enc_states = tf.nn.dynamic_rnn(dec_cell, dec_embed,
+                                                        initial_state=enc_states,
+                                                        dtype=tf.float32)
+        else:
+            fw_cell = _make_cell()
+            bw_cell = _make_cell()
+
+            dec_outputs, (dec_fw_states, dec_bw_states) = tf.nn.bidirectional_dynamic_rnn(
+                fw_cell, bw_cell, dec_embed,
+                initial_state_fw=enc_fw_states,
+                initial_state_bw=enc_bw_states,
+                dtype=tf.float32)
+            dec_outputs = tf.concat(dec_outputs, -1)
 
     model = tf.layers.dense(dec_outputs, vocab_size, activation=None)
 
@@ -284,9 +310,12 @@ def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, op
 
             yield batch_start_idx, batch_enc_input, batch_dec_input, batch_dec_length_input, batch_targets_input
 
+    model_name = '%s_cell_%s_dir_%s_bat_%d_maxlen_%d_unit_%d_layer_%d' % (
+        INFERENCE_MODE, CELL_TYPE, RNN_DIRECTION,
+        BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS)
+
     model_saver = tf.train.Saver(max_to_keep=None)
-    model_save_dir = 'cache/inf_%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d' % (
-        INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS)
+    model_save_dir = 'cache/%s' % model_name
 
     try:
         os.mkdir(model_save_dir)
@@ -344,8 +373,7 @@ def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, op
                         doc_vec = np.mean(enc_sentence, axis=0)
                         results.append(doc_vec.tolist())
 
-                output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_epoch_%d' % (
-                    INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, epoch + 1)
+                output_name = '%s_epoch_%d' % (model_name, epoch + 1)
                 curr_ts = time.time()
 
                 with open('outputs/%s_%d_train.msgpack' % (output_name, curr_ts), 'wb') as f:
@@ -355,45 +383,6 @@ def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, op
                     msgpack.dump(test_results, f)
 
     return save_path
-
-
-def get_sentence_vectors(model_path, train_corpus, test_corpus):
-    def _corpus2tensor(doc):
-        return doc[:, ::-1]
-
-    tf.get_default_graph()
-    train_results, test_results = [], []
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
-        saver = tf.train.Saver()
-        saver.restore(sess, model_path)
-
-        graph = tf.get_default_graph()
-        X = graph.get_tensor_by_name('X:0')
-        sentence_vector = graph.get_tensor_by_name('encoder/sentence_vector:0')
-
-        for corpus, results in [[train_corpus, train_results],
-                                [test_corpus, test_results]]:
-            for doc in tqdm(corpus):
-                enc_sentence = sess.run(sentence_vector, feed_dict={X: _corpus2tensor(doc)})
-                enc_sentence = enc_sentence[:, -1, :]
-                doc_vec = np.mean(enc_sentence, axis=0)
-                results.append(doc_vec.tolist())
-
-    try:
-        os.mkdir('outputs')
-    except FileExistsError:
-        logging.info('Found output directory')
-
-    output_name = '%s_cell_%s_bat_%d_maxlen_%d_unit_%d_layer_%d_epoch_%d' % (
-        INFERENCE_MODE, CELL_TYPE, BATCH_SIZE, MAX_SENTENCE_LENGTH, RNN_SIZE, RNN_LAYERS, TOTAL_EPOCH)
-    curr_ts = time.time()
-
-    with open('outputs/%s_%d_train.msgpack' % (output_name, curr_ts), 'wb') as f:
-        msgpack.dump(train_results, f)
-
-    with open('outputs/%s_%d_test.msgpack' % (output_name, curr_ts), 'wb') as f:
-        msgpack.dump(test_results, f)
 
 
 def main():
@@ -424,9 +413,6 @@ def main():
     with task_step('Train RNN model'):
         model_path = train_model(vocab_words, train_corpus, test_corpus,
                                  model, cross_entropy, optimizer, placeholders)
-
-    # with task_step('Get sentence vector from test corpus using the model'):
-    #     get_sentence_vectors(model_path, train_corpus['doc'], test_corpus['doc'])
 
 
 if __name__ == '__main__':

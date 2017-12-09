@@ -38,8 +38,8 @@ class CLF:
         doc_vecs = np.array(docs)
 
         #self.model = GridSearchCV(LinearSVC(C = 1), self.param_grid, n_jobs = 20, cv = 2, scoring = '%s' % self.score, verbose = 1)
-        # self.model = RandomForestClassifier(max_depth=None, random_state=0, n_estimators = 200)
-        self.model = GradientBoostingClassifier(verbose=2)
+        self.model = RandomForestClassifier(max_depth=None, random_state=0, n_estimators=200, verbose=2)
+        # self.model = GradientBoostingClassifier(verbose=2)
         #self.model = KNeighborsClassifier(3, n_jobs = 20)
         #self.model = MLPClassifier(alpha = 1, hidden_layer_sizes = [256, 128, 128, 128, 128], verbose = True, max_iter = 100, early_stopping = False, tol = 0.0)
 
@@ -101,15 +101,24 @@ def format_result_to_csv(filepath):
     with open(filepath, 'r') as f:
         results = json.load(f)
         for k, v in results.items():
-            m = re.match('(.*)_cell_(.*)_bat_(\d+)_maxlen_(\d+)_unit_(\d+)_layer_(\d+)_epoch_(\d+)_(\d+)', k)
+            m = re.match('(.*)'
+                         '_cell_(.*)'
+                         '_dir_(.*)'
+                         '_bat_(\d+)'
+                         '_maxlen_(\d+)'
+                         '_unit_(\d+)'
+                         '_layer_(\d+)'
+                         '_epoch_(\d+)'
+                         '_(\d+)', k)
 
             inf_mode = m.group(1)
             cell_type = m.group(2)
-            batch_size = m.group(3)
-            max_length = m.group(4)
-            num_unit = m.group(5)
-            num_layer = m.group(6)
-            epoch = m.group(7)
+            rnn_direction = m.group(3)
+            batch_size = m.group(4)
+            max_length = m.group(5)
+            num_unit = m.group(6)
+            num_layer = m.group(7)
+            epoch = m.group(8)
 
             precision = v[-2][0]
             recall = v[-2][1]
@@ -118,6 +127,7 @@ def format_result_to_csv(filepath):
             rows.append({
                 'inf_mode': inf_mode,
                 'cell_type': cell_type,
+                'rnn_direction': rnn_direction,
                 'batch_size': batch_size,
                 'sentence_length': max_length,
                 'num_unit': num_unit,
@@ -128,7 +138,8 @@ def format_result_to_csv(filepath):
                 'f1': f1})
 
     pd.DataFrame(rows,
-                 columns=['inf_mode', 'cell_type', 'batch_size', 'sentence_length',
+                 columns=['inf_mode', 'cell_type', 'rnn_direction',
+                          'batch_size', 'sentence_length',
                           'num_unit', 'num_layer', 'epoch',
                           'precision', 'recall', 'f1']).to_csv(filepath + '.csv')
 
