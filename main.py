@@ -32,10 +32,11 @@ INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'next')  # 'self' or 'next'
 RNN_DIRECTION = os.getenv('RNN_DIRECTION', 'bi')  # 'uni' or 'bi'
 CELL_TYPE = os.getenv('CELL_TYPE', 'gru')  # 'gru' or 'lstm'
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', '256'))
-TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '100'))
+TOTAL_EPOCH = int(os.getenv('TOTAL_EPOCH', '50'))
 MAX_SENTENCE_LENGTH = int(os.getenv('MAX_SENTENCE_LENGTH', '30'))
 RNN_SIZE = int(os.getenv('RNN_SIZE', '256'))
 RNN_LAYERS = int(os.getenv('RNN_LAYERS', '3'))
+EVAL_GAP = int(os.getenv('EVAL_GAP', '10'))
 
 print('INFERENCE_MODE', INFERENCE_MODE)
 print('RNN_DIRECTION', RNN_DIRECTION)
@@ -45,6 +46,7 @@ print('TOTAL_EPOCH', TOTAL_EPOCH)
 print('MAX_SENTENCE_LENGTH', MAX_SENTENCE_LENGTH)
 print('RNN_SIZE', RNN_SIZE)
 print('RNN_LAYERS', RNN_LAYERS)
+print('EVAL_GAP', EVAL_GAP)
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s',
                     level=logging.INFO)
@@ -357,7 +359,7 @@ def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, op
             save_path = model_saver.save(session, '%s/epoch_%d.ckpt' % (model_save_dir, epoch))
             logging.info('Model is saved to %s', save_path)
 
-            if (epoch + 1) % 10 == 0:
+            if (epoch + 1) % EVAL_GAP == 0:
                 logging.info('Store document vectors %s', save_path)
 
                 graph = tf.get_default_graph()
