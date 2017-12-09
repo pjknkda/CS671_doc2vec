@@ -38,8 +38,8 @@ class CLF:
         doc_vecs = np.array(docs)
 
         #self.model = GridSearchCV(LinearSVC(C = 1), self.param_grid, n_jobs = 20, cv = 2, scoring = '%s' % self.score, verbose = 1)
-        self.model = RandomForestClassifier(max_depth=None, random_state=0, n_estimators=200, verbose=2)
-        # self.model = GradientBoostingClassifier(verbose=2)
+        # self.model = RandomForestClassifier(max_depth=None, random_state=0, n_estimators=200, verbose=2)
+        self.model = GradientBoostingClassifier(verbose=2, n_estimators=200, subsample=0.5)
         #self.model = KNeighborsClassifier(3, n_jobs = 20)
         #self.model = MLPClassifier(alpha = 1, hidden_layer_sizes = [256, 128, 128, 128, 128], verbose = True, max_iter = 100, early_stopping = False, tol = 0.0)
 
