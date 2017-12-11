@@ -264,7 +264,7 @@ def build_graph(w2v_model, vocab_words):
 
         if RNN_DIRECTION == 'uni':
             dec_cell = _make_cell()
-            enc_outputs, enc_states = tf.nn.dynamic_rnn(dec_cell, dec_embed,
+            dec_outputs, dec_states = tf.nn.dynamic_rnn(dec_cell, dec_embed,
                                                         initial_state=enc_states,
                                                         dtype=tf.float32)
         else:
@@ -293,7 +293,6 @@ def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, op
 
     def _get_batches():
         vocab_size = len(vocab_words)
-        pad_idx = SPECIAL_WORDS.index('<PAD>')
 
         shuffled_indexes = list(range(train_corpus['in'].shape[0]))
         random.shuffle(shuffled_indexes)
@@ -360,7 +359,7 @@ def train_model(vocab_words, train_corpus, test_corpus, model, cross_entropy, op
             logging.info('Model is saved to %s', save_path)
 
             if (epoch + 1) % EVAL_GAP == 0:
-                logging.info('Store document vectors %s', save_path)
+                logging.info('Store document vectors')
 
                 graph = tf.get_default_graph()
                 X = graph.get_tensor_by_name('X:0')
