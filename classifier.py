@@ -78,7 +78,7 @@ def format_result_to_csv(filepath):
                          '_cell_(?P<cell_type>.*)'
                          '_dir_(?P<rnn_direction>.*)'
                          '_bat_(?P<batch_size>\d+)'
-                         '_maxlen_(?P<max_length>\d+)'
+                         '_maxlen_(?P<sentence_length>\d+)'
                          '_unit_(?P<num_unit>\d+)'
                          '_layer_(?P<num_layer>\d+)'
                          '_epoch_(?P<epoch>\d+)'
