@@ -84,9 +84,10 @@ def format_result_to_csv(filepath):
                          '_epoch_(?P<epoch>\d+)'
                          '_(?:\d+)', filename)
 
-            rows.append({
-                **m.groupdict(),
-                **report})
+            row = {}
+            row.update(m.groupdict())
+            row.update(report)
+            rows.append(row)
 
     pd.DataFrame(rows,
                  columns=['inf_mode', 'cell_type', 'rnn_direction',
